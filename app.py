@@ -23,12 +23,6 @@ except ImportError:
     HAS_PANDAS = False
 
 try:
-    from pptx import Presentation
-    HAS_PPTX = True
-except ImportError:
-    HAS_PPTX = False
-
-try:
     import docx
     HAS_DOCX = True
 except ImportError:
@@ -41,12 +35,6 @@ try:
 except ImportError:
     HAS_GEMINI = False
 
-try:
-    import ollama
-    HAS_OLLAMA = True
-except ImportError:
-    HAS_OLLAMA = False
-
 # -----------------------------------------------------------------------------
 # CONFIGURACIÓN DE PÁGINA Y CONSTANTES
 # -----------------------------------------------------------------------------
@@ -56,15 +44,18 @@ st.set_page_config(
     layout="wide"
 )
 
-# ⚠️ PEGA AQUÍ EL ID DE TU CARPETA DE GOOGLE DRIVE
+# ⚠️ RECUERDA PEGAR AQUÍ EL ID DE TU CARPETA DE GOOGLE DRIVE ANTES DE SUBIRLO A GITHUB
 DRIVE_FOLDER_ID = "1nbvHAOFCZU5DeV1fYhVIcf5zvpUnhUcN" 
 
-CARPETA_MATERIALES = "materiales_temporales"
 FORMATOS_SOPORTADOS = ["pdf", "pptx", "xlsx", "xls", "csv", "docx", "txt", "py", "m"]
 
+# Opciones de modelos actualizadas según la documentación de Google
 MODELOS_GEMINI = {
     "Gemini 3.8 Flash (Recomendado)": "gemini-3.8-flash",
+    "Gemini 3.1 Pro (Preview)": "gemini-3.1-pro-preview",
     "Gemini 3.8 Live": "gemini-3.8-live",
+    "Gemini 3.8 Live Ext. Thinking": "gemini-3.8-live-extended-thinking",
+    "Gemini 3.5 Flash": "gemini-3.5-flash",
     "Gemini 3.5 Flash-Lite": "gemini-3.5-flash-lite"
 }
 
@@ -74,19 +65,17 @@ MODELOS_GEMINI = {
 def obtener_servicio_drive():
     """Autentica con Google Drive en local (JSON) o en la nube (Secrets)."""
     try:
-        # 1. Primero intentamos leer el archivo local (Tu portátil)
         if os.path.exists("credenciales_drive.json"):
             creds = service_account.Credentials.from_service_account_file(
                 "credenciales_drive.json", scopes=["https://www.googleapis.com/auth/drive.readonly"]
             )
-        # 2. Si no está el archivo, intentamos usar los secretos (Entorno Nube)
         elif "gcp_service_account" in st.secrets:
             creds_info = dict(st.secrets["gcp_service_account"])
             creds = service_account.Credentials.from_service_account_info(
                 creds_info, scopes=["https://www.googleapis.com/auth/drive.readonly"]
             )
         else:
-            st.error("No se encontraron credenciales. Falta 'credenciales_drive.json'.")
+            st.error("No se encontraron credenciales. Falta 'credenciales_drive.json' o configurar los Secrets.")
             return None
             
         return build('drive', 'v3', credentials=creds)
@@ -116,9 +105,9 @@ def procesar_archivo_path_o_bytes(file_obj, filename_hint=""):
             df = pd.read_excel(excel_file, sheet_name=sheet_name)
             texto += f"\n--- HOJA: {sheet_name} ---\n" + df.to_string(index=False) + "\n"
         return texto
-    return "Contenido procesado."
+    return "Contenido procesado (formato de texto plano u otros soportados)."
 
-@st.cache_resource(ttl=3600) # Refresca Google Drive cada hora
+@st.cache_resource(ttl=3600) # Refresca Google Drive cada hora para no saturar la API
 def cargar_materiales_drive():
     """Descarga los archivos de Drive a la memoria y extrae el texto."""
     base_conocimiento = {}
@@ -168,25 +157,45 @@ def obtener_contexto_asignatura():
         contexto += f"--- DOCUMENTO DOCENTE: {nombre_file} ---\n{contenido}\n\n"
     return contexto
 
-def consultar_gemini_con_reintentos(prompt_sistema, prompt_usuario, api_key, model_id):
+def consultar_gemini_con_reintentos(prompt_sistema, prompt_usuario, api_key, model_id_principal):
     if not api_key:
         return "⚠️ Introduce tu API Key de Gemini."
+    if not HAS_GEMINI:
+        return "⚠️ La librería 'google-genai' no está instalada."
+        
     client = genai.Client(api_key=api_key.strip())
     contenido_completo = f"{prompt_sistema}\n\nENTRADA DEL USUARIO / TRABAJO ENTREGADO:\n{prompt_usuario}"
     
-    for intento in range(3):
-        try:
-            response = client.models.generate_content(
-                model=model_id,
-                contents=contenido_completo,
-                config=types.GenerateContentConfig(temperature=0.3)
-            )
-            return response.text
-        except Exception as e:
-            if intento < 2:
-                time.sleep((intento + 1) * 3)
-                continue
-            return f"Error al comunicarse con Gemini: {str(e)}"
+    # Cascada de supervivencia: si falla el principal, intenta con modelos más rápidos
+    modelos_a_probar = [
+        model_id_principal, 
+        "gemini-3.8-flash", 
+        "gemini-3.5-flash", 
+        "gemini-3.5-flash-lite"
+    ]
+    modelos_a_probar = list(dict.fromkeys(modelos_a_probar)) # Eliminar duplicados
+    
+    for modelo_actual in modelos_a_probar:
+        for intento in range(2): 
+            try:
+                response = client.models.generate_content(
+                    model=modelo_actual,
+                    contents=contenido_completo,
+                    config=types.GenerateContentConfig(temperature=0.3)
+                )
+                return response.text
+            except Exception as e:
+                error_str = str(e).lower()
+                # Si el error es de cuota (429), salta al siguiente modelo inmediatamente
+                if "429" in error_str or "quota" in error_str or "exhausted" in error_str:
+                    break 
+                
+                # Si es un error del servidor (503), espera 2s e inténtalo de nuevo con el mismo
+                if intento < 1:
+                    time.sleep(2)
+                    continue
+
+    return "⚠️ Los servidores de IA están saturados en este momento. Por favor, espera unos minutos e inténtalo de nuevo."
 
 # -----------------------------------------------------------------------------
 # INTERFAZ WEB PRINCIPAL
@@ -194,9 +203,10 @@ def consultar_gemini_con_reintentos(prompt_sistema, prompt_usuario, api_key, mod
 with st.sidebar:
     st.header("⚙️ Configuración")
     api_key_env = os.environ.get("GEMINI_API_KEY", "")
-    api_key = st.text_input("Gemini API Key:", value=api_key_env, type="password")
-    modelo_label = st.selectbox("Modelo Gemini:", options=list(MODELOS_GEMINI.keys()), index=0)
+    api_key = st.text_input("Gemini API Key (Oculta):", value=api_key_env, type="password")
+    modelo_label = st.selectbox("Modelo Principal:", options=list(MODELOS_GEMINI.keys()), index=0)
     modelo_seleccionado = MODELOS_GEMINI[modelo_label]
+    st.markdown("*(El sistema cambiará automáticamente a modelos más ligeros si los servidores se saturan).*")
 
 st.title("🎓 Plataforma Integrada de Evaluaciones Académicas")
 st.markdown("Evaluación automática basada en los materiales de Google Drive del profesor.")
@@ -233,7 +243,7 @@ with tab_evaluador:
                 txt_arch = procesar_archivo_path_o_bytes(arch)
                 contenido_estudiante += f"\n=== ENTREGABLE: {arch.name} ===\n" + txt_arch + "\n\n"
 
-            with st.spinner(f"Analizando entregables..."):
+            with st.spinner(f"Analizando entregables con {modelo_seleccionado}..."):
                 contexto_docente = obtener_contexto_asignatura()
                 system_prompt_evaluador = f"""
                 Eres un evaluador académico.
@@ -246,4 +256,4 @@ with tab_evaluador:
             st.markdown("## 📊 Informe de Retroalimentación Automática")
             st.markdown(resultado)
         else:
-            st.error("Sube al menos un archivo.")
+            st.error("Sube al menos un archivo para evaluar.")
