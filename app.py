@@ -228,6 +228,16 @@ with tab_evaluador:
     
     if st.session_state.base_conocimiento:
         st.info(f"📚 **Materiales sincronizados desde Drive:** {len(st.session_state.base_conocimiento)} archivo(s)")
+        
+        # 💡 Nuevo bloque de ayuda visual para limpiar la caché
+        with st.expander("💡 ¿No ves un documento recién subido por el profesor?"):
+            st.markdown("""
+            Para no saturar el sistema, la aplicación revisa si hay nuevos materiales en la nube de forma periódica. 
+            Si el equipo docente acaba de subir un documento y necesitas evaluarte ahora mismo:
+            1. Haz clic en los **tres puntos (`⋮`)** o en **Manage app** arriba a la derecha de esta web.
+            2. Selecciona **`Clear cache`**.
+            3. La página se recargará y los nuevos archivos de la asignatura aparecerán sincronizados al instante.
+            """)
     else:
         st.warning("⚠️ No se han detectado archivos en la carpeta de Drive.")
 
