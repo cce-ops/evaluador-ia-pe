@@ -40,7 +40,7 @@ except ImportError:
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="Evaluación Académica con IA",
-    page_icon="🎓",
+    page_icon="",
     layout="wide"
 )
 
