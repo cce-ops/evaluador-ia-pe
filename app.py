@@ -207,7 +207,7 @@ with st.sidebar:
     modelo_seleccionado = MODELOS_GEMINI[modelo_label]
     st.markdown("*(El sistema cambiará automáticamente a modelos más ligeros si los servidores se saturan).*")
 
-st.title("🎓 Plataforma Integrada de Evaluaciones Académicas")
+st.title("Plataforma Integrada de Evaluaciones Académicas")
 st.markdown("Evaluación automática basada en los materiales de Google Drive del profesor.")
 
 tab_rubrica, tab_evaluador = st.tabs([
